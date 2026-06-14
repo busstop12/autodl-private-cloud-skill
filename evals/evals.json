@@ -1,0 +1,27 @@
+{
+  "skill_name": "autodl-private-cloud",
+  "notes": "Live full-lifecycle evals. Eval 1 is read-only and safe. Evals 2-3 create REAL GPU containers that bill by the hour. Replace <IMAGE_UUID> with a real image_uuid — either a private image (image-xxxx from image-list) or a system/base image (base-image-xxxx, read from deploy-list template.image_uuid; pair with --cuda-v 0). Requires AUTODL_TOKEN (and AUTODL_BASE_URL if not the default). GPU names must match gpu-stock exactly, e.g. 'NVIDIA GeForce RTX 4090', 'NVIDIA A40'. Verified live 2026-06-14: created a torch base-image Container on RTX 4090 and retrieved SSH end-to-end.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "capacity-and-images-readonly",
+      "prompt": "我想在 AutoDL 私有云上跑个实验。先帮我看看现在集群里哪些 GPU 还有空闲（型号 + 空闲数量），再列一下我账号下有哪些私有镜像可以用。",
+      "expected_output": "Reports idle GPU models with counts (from gpu-stock) and lists private images with their image_uuid/name/status (from image-list). No deployments created. No state changes.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "launch-smoke-test-teardown",
+      "prompt": "用镜像 <IMAGE_UUID> 在一张有空闲的 GPU 上起一个单容器（Container 类型）做个环境 smoke test，启动命令就用 `sleep infinity`。等容器 running 之后，把 SSH 连接命令和 root 密码告诉我；确认拿到连接信息后就把这个 deployment 删掉，别让它一直计费。",
+      "expected_output": "Creates a Container deployment on an available GPU using the given image, waits until a container is running, reports the ssh_command + root_password from container info, then deletes the deployment so billing stops. Ends with no leftover running deployment.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "sweep-scale-teardown",
+      "prompt": "我要跑个超参搜索。帮我开一个 ReplicaSet，镜像用 <IMAGE_UUID>，先起 1 个 worker，挑每小时价格别超过 2 块钱的卡。起来之后把规模扩到 2 个 worker。最后把整个 deployment 停掉并删除，全部清理干净。",
+      "expected_output": "Creates a ReplicaSet (replica_num 1) with a price ceiling of ~2000 (0.001 CNY units), confirms it comes up, scales to replica_num 2 via deploy-scale, then stops and deletes the deployment. Ends fully cleaned up with nothing left billing.",
+      "files": []
+    }
+  ]
+}
