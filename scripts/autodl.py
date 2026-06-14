@@ -6,9 +6,15 @@ One command per endpoint plus a few convenience commands for automating
 research-experiment lifecycles (launch GPU container -> wait for it to come up
 -> read SSH connection info -> tear it down so billing stops).
 
-Auth & target are read from the environment (override with flags):
-  AUTODL_TOKEN     developer token  (Console -> Settings -> Developer Token)
-  AUTODL_BASE_URL  API base URL     (default: https://private.autodl.com)
+Auth & target resolve in this order (first hit wins):
+  developer token: --token  >  $AUTODL_TOKEN  >  token file
+  base URL:        --base-url  >  $AUTODL_BASE_URL  >  https://private.autodl.com
+
+The token file lets you save the token once instead of re-exporting it each
+session. Default location $AUTODL_TOKEN_FILE or ~/.config/autodl/token (created
+with 0600 perms). Save one with:  autodl.py save-token --token <T>  (or pipe it
+on stdin). Check what's configured — without revealing it — with: token-status.
+Get a token from Console -> Settings -> Developer Token.
 
 Every endpoint returns the envelope {"code","msg","data"}. This tool checks
 code == "Success"; on anything else it prints msg to stderr and exits 1.
@@ -34,14 +40,72 @@ GIB = 1024 ** 3  # responses report memory in bytes; create requests take whole 
 
 
 # --------------------------------------------------------------------------- #
+# Token storage                                                               #
+# --------------------------------------------------------------------------- #
+def token_file_path():
+    """Where the saved token lives: $AUTODL_TOKEN_FILE or ~/.config/autodl/token."""
+    env = os.environ.get("AUTODL_TOKEN_FILE")
+    if env:
+        return os.path.expanduser(env)
+    return os.path.join(os.path.expanduser("~"), ".config", "autodl", "token")
+
+
+def read_token_file():
+    """Return the token saved on disk, or None if there's no usable file."""
+    path = token_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            tok = f.read().strip()
+        return tok or None
+    except (OSError, IOError):
+        return None
+
+
+def write_token_file(token):
+    """Persist the token to disk with owner-only (0600) perms; return the path."""
+    token = token.strip()
+    if not token:
+        sys.exit("ERROR: refusing to save an empty token.")
+    path = token_file_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Create with 0600 so the secret isn't world/group readable.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (token + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)  # enforce perms even if the file pre-existed
+    return path
+
+
+def resolve_token(args):
+    """Token from --token, then $AUTODL_TOKEN, then the saved token file."""
+    return (getattr(args, "token", None)
+            or os.environ.get("AUTODL_TOKEN")
+            or read_token_file())
+
+
+def token_source(args):
+    """Human-readable origin of the active token, without revealing its value."""
+    if getattr(args, "token", None):
+        return "--token flag"
+    if os.environ.get("AUTODL_TOKEN"):
+        return "$AUTODL_TOKEN env var"
+    if read_token_file():
+        return f"token file ({token_file_path()})"
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # Low-level HTTP                                                               #
 # --------------------------------------------------------------------------- #
 def api_request(args, method, path, body=None):
     """Call the API and return the unwrapped `data` field, or exit non-zero."""
-    token = args.token or os.environ.get("AUTODL_TOKEN")
+    token = resolve_token(args)
     if not token:
-        sys.exit("ERROR: no token. Set AUTODL_TOKEN or pass --token. "
-                 "Get one from Console -> Settings -> Developer Token.")
+        sys.exit("ERROR: no token. Provide one with --token, $AUTODL_TOKEN, or save "
+                 f"it once with `autodl.py save-token` (stored at {token_file_path()}). "
+                 "Get a token from Console -> Settings -> Developer Token.")
     base = (args.base_url or os.environ.get("AUTODL_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
     url = base + path
     headers = {"Authorization": token, "Content-Type": "application/json"}
@@ -343,6 +407,35 @@ def cmd_raw(args):
     emit(api_request(args, args.method.upper(), args.path, body))
 
 
+def cmd_save_token(args):
+    """Persist a developer token to the token file (0600) for reuse across sessions.
+
+    Token source: --token, else read from stdin (so it never shows in argv/logs)."""
+    token = args.token
+    if not token and not sys.stdin.isatty():
+        token = sys.stdin.read()
+    if not token or not token.strip():
+        sys.exit("ERROR: no token given. Pass --token <T> or pipe it on stdin, e.g.\n"
+                 "  printf %s \"$TOKEN\" | autodl.py save-token")
+    path = write_token_file(token)
+    emit({"saved": True, "path": path, "permissions": "0600",
+          "note": "Token stored. Future commands read it automatically; no env var needed."})
+
+
+def cmd_token_status(args):
+    """Report whether a token is configured and from where — never prints the token."""
+    src = token_source(args)
+    emit({
+        "configured": src is not None,
+        "source": src,
+        "token_file": token_file_path(),
+        "token_file_exists": os.path.exists(token_file_path()),
+        "hint": (None if src else
+                 "No token found. Get one from Console -> Settings -> Developer Token, "
+                 "then save it with: autodl.py save-token --token <T>"),
+    })
+
+
 # --------------------------------------------------------------------------- #
 # Argument parsing                                                            #
 # --------------------------------------------------------------------------- #
@@ -478,6 +571,17 @@ def build_parser():
     sp.add_argument("--path", required=True, help="e.g. /api/v1/dev/machine/gpu_stock")
     sp.add_argument("--body", help="JSON string request body")
     sp.set_defaults(func=cmd_raw)
+
+    # save-token
+    sp = sub.add_parser("save-token",
+                        help="save a developer token to the token file (0600) for reuse")
+    sp.add_argument("--token", help="the token; if omitted, read from stdin")
+    sp.set_defaults(func=cmd_save_token)
+
+    # token-status
+    sp = sub.add_parser("token-status",
+                        help="show whether/where a token is configured (never prints it)")
+    sp.set_defaults(func=cmd_token_status)
 
     return p
 

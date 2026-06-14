@@ -30,20 +30,52 @@ a container lives exactly as long as its `cmd` runs. If you're reasoning about *
 platform behaves a certain way (scheduling, lifecycle, container reuse, scaling), read
 `references/elastic-deploy-concepts.md` first.
 
-## Setup (do this first)
+## Setup: token (do this first, every session)
 
-The CLI needs a developer token. Read it from the environment so it never appears in
-command logs:
+The CLI needs a developer token. It resolves one in this order — **first hit wins**:
+
+1. `--token` flag on the call
+2. `$AUTODL_TOKEN` environment variable
+3. the **token file** — `$AUTODL_TOKEN_FILE` or `~/.config/autodl/token` (perms `0600`)
+
+The token file means the user saves the token **once** and never has to paste or
+re-export it again. **Always begin by checking what's configured** (this never prints
+the token itself):
 
 ```bash
-export AUTODL_TOKEN="<token from Console -> Settings -> Developer Token>"
-export AUTODL_BASE_URL="https://private.autodl.com"   # override for a self-hosted cluster
+python3 scripts/autodl.py token-status
 ```
 
-If `AUTODL_TOKEN` is unset, every command fails fast with a clear message. You can also
-pass `--token`/`--base-url` per call, but the env var is cleaner and safer.
+### First-time use — prompt the user to create and save the token
 
-Confirm connectivity before anything else:
+If `token-status` returns `"configured": false`, the user has not set up a token yet.
+**Do not guess one and do not proceed.** Instead, prompt the user like this:
+
+> This skill needs your AutoDL developer token. Open the AutoDL Console →
+> **Settings → Developer Token**, copy it, and paste it here. I'll save it to
+> `~/.config/autodl/token` (owner-only `0600`) so you only have to do this once.
+
+When the user gives you the token, save it. Prefer **stdin** so the secret never lands
+in shell history or argv logs:
+
+```bash
+printf %s '<TOKEN>' | python3 scripts/autodl.py save-token
+```
+
+(`save-token --token <TOKEN>` also works but puts the token in the command line.) After
+saving, confirm with `token-status` (expect `"configured": true`, source = token file).
+From then on, every command picks the token up automatically — no env var needed.
+
+> Treat the token as a secret: never echo it back, never paste it into a summary, and
+> never commit it. The file lives in the user's home dir, outside this skill's repo.
+
+Optionally override the API target (only for a self-hosted cluster):
+
+```bash
+export AUTODL_BASE_URL="https://private.autodl.com"   # or pass --base-url per call
+```
+
+Then confirm connectivity before anything else:
 
 ```bash
 python3 scripts/autodl.py gpu-stock --idle-only
@@ -82,6 +114,8 @@ to run freely. Commands marked **needs `--yes`** preview-only until confirmed (s
 
 | Command | What it does | Sensitive? |
 |---|---|---|
+| `token-status` | show whether/where a token is configured (never prints it) | no |
+| `save-token [--token T]` | save a token to `~/.config/autodl/token` (`0600`); reads stdin if no `--token` | no |
 | `gpu-stock [--idle-only]` | idle/total GPU counts by model | no |
 | `system-image-list [--filter X]` | platform system/base images + UUIDs (`base-image-xxxx`) | no |
 | `image-list` | your **private** images (`image-xxxx`) | no |
