@@ -22,9 +22,10 @@ output is easy to parse and chain.
 
 ## Requirements
 
-- Python 3 with the [`requests`](https://pypi.org/project/requests/) package
-  (`pip install requests`)
-- An AutoDL developer token (Console → **Settings → Developer Token**)
+- Python 3 with [`requests`](https://pypi.org/project/requests/) (`pip install requests`)
+- [`cryptography`](https://pypi.org/project/cryptography/) (`pip install cryptography`) —
+  for the encrypted token store (secure mode)
+- An AutoDL developer token (Console → **账号设置 → 开发者Token → 新增Token**)
 
 ## Setup: the token
 
@@ -32,14 +33,46 @@ The CLI resolves a token in this order — **first hit wins**:
 
 1. `--token` flag on the call
 2. `$AUTODL_TOKEN` environment variable
-3. the **token file** — `$AUTODL_TOKEN_FILE` or `~/.config/autodl/token` (saved `0600`)
+3. the **encrypted store** — `$AUTODL_CREDENTIALS_FILE` or `~/.config/autodl/credentials.enc`
+4. the legacy plaintext token file — `$AUTODL_TOKEN_FILE` or `~/.config/autodl/token`
 
-Save it once and never paste it again. Prefer stdin so the secret never lands in shell
-history:
+### Secure mode (recommended)
+
+Keep the token **encrypted at rest, password-protected, and never pasted into a terminal
+or AI/agent context.** `set-token` pops a native GUI dialog (tkinter, with macOS
+`osascript` / Windows PowerShell fallbacks) where you paste the token and choose a
+password; it's sealed with Fernet under a scrypt-derived key and written `0600`. The
+token and password never pass through argv, stdin, env, shell history, or stdout.
 
 ```bash
-printf %s '<YOUR_TOKEN>' | python3 scripts/autodl.py save-token
-python3 scripts/autodl.py token-status   # confirms config without printing the token
+python3 scripts/autodl.py set-token      # GUI: paste token + choose a password
+python3 scripts/autodl.py token-status   # confirms config + unlock state (never prints the token)
+```
+
+Get the token from the Console: **账号设置 → 开发者Token → + 新增Token**, then copy it
+(it's long, starts with `eyJ...`).
+
+Every later call that needs the token pops a GUI password prompt; on the right password
+the token is decrypted **in memory** for that one request and never printed. A successful
+unlock is cached (machine-bound, encrypted, `0600`) for a TTL (default 300 s) so a
+multi-step run prompts once instead of per call:
+
+```bash
+python3 scripts/autodl.py lock                 # forget the unlock now (re-prompt next call)
+python3 scripts/autodl.py --unlock-ttl 0 ...    # never cache: prompt on this call
+python3 scripts/autodl.py change-password       # rotate the encryption password (GUI)
+```
+
+The GUI dialogs need a desktop session. If `$AUTODL_TOKEN` is set it takes precedence over
+the encrypted store and is visible to whoever set it — leave it unset for true secure mode.
+
+### Legacy / headless (no GUI)
+
+For CI or a headless box with no display, use the env var or an **unencrypted** token file
+(less secure — the token sits in plaintext at rest):
+
+```bash
+printf %s '<YOUR_TOKEN>' | python3 scripts/autodl.py save-token   # plaintext file, 0600, stdin (no argv leak)
 ```
 
 Optionally point at a self-hosted cluster:
@@ -48,7 +81,7 @@ Optionally point at a self-hosted cluster:
 export AUTODL_BASE_URL="https://private.autodl.com"   # or pass --base-url per call
 ```
 
-Confirm connectivity:
+Confirm connectivity (triggers the password prompt the first time in secure mode):
 
 ```bash
 python3 scripts/autodl.py gpu-stock --idle-only
@@ -81,8 +114,11 @@ python3 scripts/autodl.py deploy-delete --deployment-uuid <UUID> --yes
 
 | Command | What it does | Sensitive? |
 |---|---|---|
-| `token-status` | show whether/where a token is configured (never prints it) | no |
-| `save-token [--token T]` | save a token to `~/.config/autodl/token` (`0600`); reads stdin if no `--token` | no |
+| `token-status` | show whether/where a token is configured + unlock state (never prints it) | no |
+| `set-token` | **secure**: encrypt the token under a password via GUI (`credentials.enc`, `0600`) | no |
+| `change-password` | rotate the encryption password via GUI | no |
+| `lock` | clear the unlock cache so the next op re-prompts | no |
+| `save-token [--token T]` | legacy: save an **unencrypted** token to `~/.config/autodl/token` (`0600`); stdin if no `--token` | no |
 | `gpu-stock [--idle-only]` | idle/total GPU counts by model | no |
 | `system-image-list [--filter X]` | platform system/base images + UUIDs | no |
 | `image-list` | your private images | no |
