@@ -108,12 +108,77 @@ they only print a preview of the exact request and exit — a built-in human-con
 gate. `deploy-create` / `deploy-scale` start containers that **bill by the hour**, so
 treat teardown as part of the same task.
 
-## Installation as a Claude Code skill
+## Installation
 
-Clone or symlink this directory into your skills directory:
+### Option 1 — the `skills` CLI (recommended)
+
+[vercel-labs/skills](https://github.com/vercel-labs/skills) installs the skill into the
+correct directory for your agent automatically.
 
 ```bash
-ln -s "$PWD/autodl-private-cloud" ~/.claude/skills/autodl-private-cloud
+# Interactive: prompts for scope (global/project) and target agent(s)
+npx skills add https://github.com/busstop12/autodl-private-cloud-skill
 ```
 
-Claude will then load it automatically when a task involves AutoDL GPU provisioning.
+Pick the agent and scope explicitly — `-g` global, `-a` agent, `-y` skip prompts:
+
+```bash
+# Claude Code, global
+npx skills add https://github.com/busstop12/autodl-private-cloud-skill -g -a claude-code -y
+
+# Codex, global
+npx skills add https://github.com/busstop12/autodl-private-cloud-skill -g -a codex -y
+
+# Both at once
+npx skills add https://github.com/busstop12/autodl-private-cloud-skill -g -a claude-code -a codex -y
+```
+
+Drop `-g` to install into the current project instead. Update or remove later:
+
+```bash
+npx skills update autodl-private-cloud
+npx skills remove autodl-private-cloud -a claude-code -a codex
+```
+
+### Option 2 — manual clone / download
+
+A skill is just a directory containing `SKILL.md`. Clone this repo into your agent's skills
+directory, naming the folder `autodl-private-cloud`.
+
+**Claude Code**
+
+```bash
+# global (available in all projects)
+git clone https://github.com/busstop12/autodl-private-cloud-skill \
+  ~/.claude/skills/autodl-private-cloud
+
+# current project only
+git clone https://github.com/busstop12/autodl-private-cloud-skill \
+  .claude/skills/autodl-private-cloud
+```
+
+**Codex**
+
+```bash
+# global
+git clone https://github.com/busstop12/autodl-private-cloud-skill \
+  ~/.codex/skills/autodl-private-cloud
+
+# current project only
+git clone https://github.com/busstop12/autodl-private-cloud-skill \
+  .agents/skills/autodl-private-cloud
+```
+
+Codex skill loading: see the [Codex Skills docs](https://developers.openai.com/codex/skills).
+
+Prefer not to use git? Download the repo ZIP (**Code → Download ZIP**), unzip it, and place
+the folder at the path above — make sure it is named `autodl-private-cloud` with `SKILL.md`
+at its root.
+
+| Agent | Global path | Project path |
+|---|---|---|
+| Claude Code | `~/.claude/skills/autodl-private-cloud/` | `.claude/skills/autodl-private-cloud/` |
+| Codex | `~/.codex/skills/autodl-private-cloud/` | `.agents/skills/autodl-private-cloud/` |
+
+After installing, the agent loads the skill automatically when a task involves AutoDL GPU
+provisioning. Then configure your token — see **Setup: the token** above.
