@@ -36,38 +36,77 @@ The CLI needs a developer token. It resolves one in this order — **first hit w
 
 1. `--token` flag on the call
 2. `$AUTODL_TOKEN` environment variable
-3. the **token file** — `$AUTODL_TOKEN_FILE` or `~/.config/autodl/token` (perms `0600`)
+3. the **encrypted store** — `$AUTODL_CREDENTIALS_FILE` or `~/.config/autodl/credentials.enc`
+   (token sealed with Fernet under a scrypt-derived password key; perms `0600`)
+4. the **legacy plaintext token file** — `$AUTODL_TOKEN_FILE` or `~/.config/autodl/token`
 
-The token file means the user saves the token **once** and never has to paste or
-re-export it again. **Always begin by checking what's configured** (this never prints
-the token itself):
+**Always begin by checking what's configured** (this never prints the token itself):
 
 ```bash
 python3 scripts/autodl.py token-status
 ```
 
-### First-time use — prompt the user to create and save the token
+### Secure mode is the default — do NOT ask the user to paste their token into chat
+
+The recommended setup keeps the token **encrypted at rest, password-protected, and out
+of this conversation entirely.** The token and password are entered through a native GUI
+dialog (tkinter, with macOS `osascript` / Windows PowerShell fallbacks) — so the secret
+never passes through argv, stdin, the environment, shell history, or any AI/agent context.
 
 If `token-status` returns `"configured": false`, the user has not set up a token yet.
-**Do not guess one and do not proceed.** Instead, prompt the user like this:
+**Do not ask the user to paste the token into the chat.** Instead, walk them through
+getting one from the Console and entering it into the GUI dialog. Present these exact
+steps (the wording in the Console is Chinese — use the real labels):
 
-> This skill needs your AutoDL developer token. Open the AutoDL Console →
-> **Settings → Developer Token**, copy it, and paste it here. I'll save it to
-> `~/.config/autodl/token` (owner-only `0600`) so you only have to do this once.
+> **第一次使用，需要先拿到你的 AutoDL 开发者 Token：**
+> 1. 登录 AutoDL 私有云控制台，点左侧边栏最下方的 **「账号设置」**。
+> 2. 在 **「开发者Token」** 标签页，点蓝色的 **「+ 新增Token」** 按钮（已有 Token 也会列在下方）。
+> 3. 点 Token 右侧的 **复制图标** 把它复制到剪贴板（Token 很长，以 `eyJ...` 开头）。
+> 4. 复制好后告诉我，我会弹出一个加密设置窗口 —— 你**把 Token 粘贴进去并设置一个密码**即可。
+>    Token 会被加密保存到 `~/.config/autodl/credentials.enc`（仅本人可读 `0600`），
+>    **全程不经过聊天框，我看不到你的 Token 和密码。**
 
-When the user gives you the token, save it. Prefer **stdin** so the secret never lands
-in shell history or argv logs:
+Then launch the GUI setup, which pops a dialog where they paste the token and choose an
+encryption password:
 
 ```bash
-printf %s '<TOKEN>' | python3 scripts/autodl.py save-token
+python3 scripts/autodl.py set-token
 ```
 
-(`save-token --token <TOKEN>` also works but puts the token in the command line.) After
-saving, confirm with `token-status` (expect `"configured": true`, source = token file).
-From then on, every command picks the token up automatically — no env var needed.
+(English equivalent of the Console path, in case the UI is in English: **Account Settings
+→ Developer Token → + Add Token → copy**.)
 
-> Treat the token as a secret: never echo it back, never paste it into a summary, and
-> never commit it. The file lives in the user's home dir, outside this skill's repo.
+**How auth works on every call after that:** each command that needs the token pops a
+GUI password prompt; on the correct password the token is decrypted **in memory**, used
+for that one request, and never printed. A successful unlock is cached (machine-bound,
+encrypted, `0600`) for an **unlock TTL** (default 300 s) so a multi-step run prompts once
+instead of per call. Control it with:
+
+```bash
+python3 scripts/autodl.py lock                 # forget the unlock now (re-prompt next call)
+python3 scripts/autodl.py --unlock-ttl 0 ...   # never cache: prompt on this call
+python3 scripts/autodl.py --no-cache ...        # ignore/!refresh cache for this call
+python3 scripts/autodl.py change-password       # rotate the encryption password (GUI)
+```
+
+After `set-token`, confirm with `token-status` (expect `"configured": true`, source =
+encrypted store). **Note:** the GUI dialogs need a desktop session — these commands are
+for the *user* to run at their machine; you can suggest and launch them, but you cannot
+type into the dialog.
+
+> Treat the token as a secret: never echo it, never paste it into a summary, never commit
+> it. If `$AUTODL_TOKEN` is set in the environment it takes precedence over the encrypted
+> store and is visible to whoever set it — for true secure mode, leave it unset.
+
+### Legacy / headless alternative (no GUI)
+
+For CI or a headless box with no display, you can still use the env var or an **unencrypted**
+token file (`save-token`, stored `0600`). This is less secure — the token sits in plaintext —
+so prefer the encrypted store on a normal desktop:
+
+```bash
+printf %s '<TOKEN>' | python3 scripts/autodl.py save-token   # plaintext file, stdin (no argv leak)
+```
 
 Optionally override the API target (only for a self-hosted cluster):
 
@@ -75,7 +114,8 @@ Optionally override the API target (only for a self-hosted cluster):
 export AUTODL_BASE_URL="https://private.autodl.com"   # or pass --base-url per call
 ```
 
-Then confirm connectivity before anything else:
+Then confirm connectivity before anything else (this will trigger the password prompt the
+first time if you're in secure mode):
 
 ```bash
 python3 scripts/autodl.py gpu-stock --idle-only
@@ -114,8 +154,11 @@ to run freely. Commands marked **needs `--yes`** preview-only until confirmed (s
 
 | Command | What it does | Sensitive? |
 |---|---|---|
-| `token-status` | show whether/where a token is configured (never prints it) | no |
-| `save-token [--token T]` | save a token to `~/.config/autodl/token` (`0600`); reads stdin if no `--token` | no |
+| `token-status` | show whether/where a token is configured + unlock state (never prints it) | no |
+| `set-token` | **secure GUI setup**: encrypt token under a password (`credentials.enc`, `0600`) | no |
+| `change-password` | rotate the encryption password via GUI (re-encrypts the token) | no |
+| `lock` | clear the unlock cache so the next op re-prompts for the password | no |
+| `save-token [--token T]` | LEGACY: save an **unencrypted** token to `~/.config/autodl/token` (`0600`); reads stdin if no `--token` | no |
 | `gpu-stock [--idle-only]` | idle/total GPU counts by model | no |
 | `system-image-list [--filter X]` | platform system/base images + UUIDs (`base-image-xxxx`) | no |
 | `image-list` | your **private** images (`image-xxxx`) | no |
